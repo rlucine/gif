@@ -99,7 +99,8 @@ class BitReader(object):
     #------------------------------------------------
     def __init__(self, byte_string):
         '''Initialize the reader with a complete byte string'''
-        assert isinstance(byte_string, bytes)
+        if not isinstance(byte_string, bytes):
+            raise TypeError("Requires bytelike object")
         self._str = byte_string
         self._ptr = 0
         self._len = len(byte_string) * 8
@@ -205,27 +206,14 @@ class BitWriter(object):
 #================================================================
 # Block compression algorithms
 #================================================================
-def block_split(fileOrBytes):
+def block_split(stream):
     '''Parses through sub-blocks and returns the entire byte string'''
     ret = bytes()
-    if isinstance(fileOrBytes, bytes):
-        assert False
-        raw_bytes = fileOrBytes
-        #Parse via bytes
-        block_size = raw_bytes[0]
-        block_ptr = 1
-        while block_size:
-            ret += raw_bytes[block_ptr:block_ptr + block_size]
-            block_ptr += block_size + 1
-            block_size = raw_bytes[block_ptr - 1]
-    else:
-        #Basically just assume it's a file stream
-        file = fileOrBytes
-        #Parse from file stream
-        block_size = file.read(1)[0]
-        while block_size:
-            ret += file.read(block_size)
-            block_size = file.read(1)[0]
+    #Parse from file stream
+    block_size = stream.read(1)[0]
+    while block_size:
+        ret += stream.read(block_size)
+        block_size = stream.read(1)[0]
     return ret
     
 def block_join(raw_bytes):

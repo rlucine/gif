@@ -258,7 +258,7 @@ def lzw_decompress(raw_bytes, lzw_min, color_table):
             bit_inc = (1 << (bit_size)) - 1
             code_last = None
             #Clear the code table
-            code_table = [None for x in range(END + 1)]
+            code_table = [None] * (END + 1)
             for x in range(code_table_len):
                 code_table[x] = (x,)
         elif code_id == END:
@@ -288,7 +288,7 @@ def lzw_compress(indices, lzw_min, color_table):
     '''A more optimized compression algorithm that uses a hash
     instead of a list'''
     #Init streams
-    idx_in = iter((x,) for x in indices)
+    idx_in = map(lambda x: (x,), indices)
     bin_out = BitWriter()
     idx_buf = next(idx_in)
     #Init special codes
@@ -302,7 +302,7 @@ def lzw_compress(indices, lzw_min, color_table):
     #Init code table
     code_table_len = len(color_table)
     index = END + 1
-    code_table = dict(((x,), x) for x in range(code_table_len))
+    code_table = { ((x,), x) for x in range(code_table_len) }
     
     #Begin with the clear code
     bin_out.write(CLEAR, bit_size)

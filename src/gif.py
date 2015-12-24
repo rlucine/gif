@@ -996,9 +996,15 @@ class Gif(object):
     #------------------------------------------------
     # Accessors
     #------------------------------------------------
-    def images(self):
-        '''Get all the image blocks'''
-        return [b for b in self._blocks if isinstance(b, ImageBlock)]
+    @property
+    def gct(self):
+        '''Get the GCT'''
+        return self._gct
+        
+    @property
+    def blocks(self):
+        '''Get the GIF blocks'''
+        return self._blocks
         
     #------------------------------------------------
     # Mutation

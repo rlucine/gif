@@ -11,14 +11,16 @@
 # * w3.org/Graphics/GIF/spec-gif89a.txt
 
 #--- Included modules ---
-import struct
 from base64 import encodebytes as base64encode
+from struct import pack, unpack, calcsize
+from io import BytesIO
 
 #--- Constants ---
 BLOCK_HEADER = 0x21
 IMAGE_HEADER = 0x2C
 BLOCK_FOOTER = 0
 GRAPHIC_HEADER = 0xF9
+GRAPHIC_FOOTER = 0
 GRAPHIC_SIZE = 4
 COMMENT_HEADER = 0xFE
 TEXT_HEADER = 0x1
@@ -26,9 +28,12 @@ TEXT_SIZE = 12
 APPLICATION_HEADER = 0xFF
 APPLICATION_SIZE = 11
 GIF_HEADER = "GIF"
-GIF_87A = "87a"
-GIF_89A = "89a"
+GIF87a = "87a"
+GIF89a = "89a"
 GIF_FOOTER = 0x3B
+
+COLORS_MAX = 256
+COLOR_PAD = b"\0\0\0"
 
 #================================================================
 # Error classes
@@ -37,51 +42,6 @@ class GifFormatError(RuntimeError):
     '''Raised when invalid format is encountered'''
     pass
 
-#================================================================
-# Byte streaming class
-#================================================================
-class ByteStream(object):
-    '''Object that takes a byte string and can read bytes as from
-    a file'''
-    
-    __slots__ = [
-        "_source",
-    ]
-    
-    #------------------------------------------------
-    # Construction
-    #------------------------------------------------
-    def __init__(self, source):
-        '''Initialize stream based on some source in memory'''
-        if not isinstance(source, bytes):
-            raise TypeError("Requires byte-like object")
-        #Do this to avoid having source be a bytes_iterator
-        self._source = iter(source)
-    
-    #------------------------------------------------
-    # Reading
-    #------------------------------------------------
-    def read(self, amount):
-        '''Read amount of bytes from the stream'''
-        out = bytearray()
-        try:
-            while amount:
-                #The generator produces int, not bytes
-                out.append(next(self._source))
-                amount -= 1
-        except StopIteration:
-            pass
-        return bytes(out)
-
-    def unpack(self, fmt):
-        '''Read a new struct-formatted tuple from stream
-        If only one item in tuple, return just the item'''
-        size = struct.calcsize(fmt)
-        temp = struct.unpack(fmt, self.read(size))
-        if len(temp) == 1:
-            return temp[0]
-        return temp
-        
 #================================================================
 # Bit-level operations
 #================================================================
@@ -202,6 +162,16 @@ class BitWriter(object):
     def to_bytes(self):
         '''Returns the bytes'''
         return bytes(self._bytes)
+        
+#================================================================
+# Stream unpacking
+#================================================================
+def stream_unpack(fmt, stream):
+    '''Unpack the next struct from the stream'''
+    ret = unpack(fmt, stream.read(calcsize(fmt)))
+    if len(ret) == 1:
+        return ret[0]
+    return ret
 
 #================================================================
 # Block compression algorithms
@@ -234,20 +204,21 @@ def block_join(raw_bytes):
 #================================================================
 # LZW compression algorithms
 #================================================================
-def lzw_decompress(raw_bytes, lzw_min, color_table):
+def lzw_decompress(raw_bytes, lzw_min):
     '''Decompress the LZW data and yields output'''
+
     #Initialize streams
     code_in = BitReader(raw_bytes)
-    idx_out = list()
+    idx_out = []
     #Set up bit reading
     bit_size = lzw_min + 1
     bit_inc = (1 << (bit_size)) - 1
     #Initialize special codes
-    code_table_len = len(color_table)
     CLEAR = 1 << lzw_min
     END = CLEAR + 1
+    code_table_len = END + 1
     #Begin reading codes
-    code_last = None
+    code_last = -1
     while code_last != END:
         #Get the next code id
         code_id = code_in.read(bit_size)
@@ -256,9 +227,9 @@ def lzw_decompress(raw_bytes, lzw_min, color_table):
             #Reset size readers
             bit_size = lzw_min + 1
             bit_inc = (1 << (bit_size)) - 1
-            code_last = None
+            code_last = -1
             #Clear the code table
-            code_table = [None] * (END + 1)
+            code_table = [-1] * code_table_len
             for x in range(code_table_len):
                 code_table[x] = (x,)
         elif code_id == END:
@@ -269,7 +240,7 @@ def lzw_decompress(raw_bytes, lzw_min, color_table):
             #Table has code_id - output code
             idx_out.extend(current)
             k = (current[0],)
-        elif code_last is not None:
+        elif code_last not in (-1, CLEAR, END):
             previous = code_table[code_last]
             #Code not in table
             k = (previous[0],)
@@ -279,14 +250,16 @@ def lzw_decompress(raw_bytes, lzw_min, color_table):
             bit_size += 1
             bit_inc = (1 << (bit_size)) - 1
         #Update the code table with previous + k
-        if code_last is not None and code_table[code_last]:
+        if code_last not in (-1, CLEAR, END):
             code_table.append(code_table[code_last] + k)
         code_last = code_id
     return idx_out
 
-def lzw_compress(indices, lzw_min, color_table):
-    '''A more optimized compression algorithm that uses a hash
-    instead of a list'''
+def lzw_compress(indices, lzw_min):
+    ''' A more optimized compression algorithm that uses a hash
+        instead of a list
+    '''
+
     #Init streams
     idx_in = map(lambda x: (x,), indices)
     bin_out = BitWriter()
@@ -294,15 +267,15 @@ def lzw_compress(indices, lzw_min, color_table):
     #Init special codes
     CLEAR = 1 << lzw_min
     END = CLEAR + 1
+    code_table_len = max(indices)+1
     #Set up bit reading
     bit_size = lzw_min + 1
     bit_inc = (1 << bit_size) - 1
     if not bit_size < 13:
         raise ValueError("Bad minumum for LZW")
     #Init code table
-    code_table_len = len(color_table)
     index = END + 1
-    code_table = { ((x,), x) for x in range(code_table_len) }
+    code_table = dict(((x,), x) for x in range(code_table_len))
     
     #Begin with the clear code
     bin_out.write(CLEAR, bit_size)
@@ -311,7 +284,10 @@ def lzw_compress(indices, lzw_min, color_table):
             idx_buf += k
         else:
             #Output just index buffer
-            code_id = code_table[idx_buf]
+            try:
+                code_id = code_table[idx_buf]
+            except:
+                raise
             bin_out.write(code_id, bit_size)
 
             #Update code table
@@ -342,19 +318,35 @@ def lzw_compress(indices, lzw_min, color_table):
     return bin_out.to_bytes()
     
 #================================================================
-# Base class for GIF blocks
+# GIF component base class
 #================================================================
 class GifBlock(object):
-    '''Base class for all GIF blocks'''
+    '''Base class for GIF blocks'''
     
     __slots__ = []
+    
+    _deprecated = False
+    _version = GIF87a
+    
+    #------------------------------------------------
+    # Check for deprecation
+    #------------------------------------------------
+    @classmethod
+    def deprecated(cls):
+        '''Check if this extension is deprecated'''
+        return cls._deprecated
+        
+    @classmethod
+    def version(cls):
+        '''Get the version required for this block'''
+        return cls._version
     
 #================================================================
 # GIF components : Image block
 #================================================================
 class ImageBlock(GifBlock):
-    '''Initializes a GIF image block from the file
-    Don't even bother with private attributes, there are too many'''
+    ''' Initializes a GIF image block from the file
+    '''
     
     __slots__ = [
         "_x",
@@ -365,64 +357,189 @@ class ImageBlock(GifBlock):
         "_lct",
         "_lzw_min",
         "_lzw",
-        "_gct",
+        "_ncolors",
     ]
     
     #------------------------------------------------
     # Construction
     #------------------------------------------------
-    def __init__(self, gct, lzw='', lzw_min=0, *, lct=None, inter=0, pos=None, size=None):
-        ''' Loads an image block given its properties '''
-        #Create a blank image block
-        self._x, self._y = pos if pos else (0, 0)
-        self._width, self._height = size if size else (0, 0)
-        self._interlace = bool(inter)
-        self._lct = lct if lct else []
-        self._lzw_min = lzw_min
-        self._lzw = lzw
-        #Link to external global color table
-        self._gct = gct
+    def __init__(self):
+        ''' Create a blank image block '''
+        self._x, self._y = 0, 0
+        self._width, self._height = 0, 0
+        self._interlace = False
+        self._lct = []
+        self._lzw_min = 0
+        self._lzw = b""
+        self._ncolors = 0
         
     #------------------------------------------------
     # Decoding
     #------------------------------------------------
     @classmethod
-    def decode(cls, file, gct):
+    def decode(cls, stream, gct):
         ''' Reads bytes from the already-open file.
             Should happen after block header 0x2c is discovered
             Requires to link with the main GIF gct, but can load without file
         '''
+        ret = cls()
+        
         #Unpack image descriptor
-        x, y, width, height, packed_byte = file.unpack('<4HB')
+        *ret.position, ret._width, ret._height, packed_byte = stream_unpack('<4HB', stream)
         
         #Unpack the packed field
         lct_exists = (packed_byte >> 7) & 1
-        interlace = (packed_byte >> 6) & 1
+        ret._interlace = (packed_byte >> 6) & 1
         lct_sorted = (packed_byte >> 5) & 1
         lct_size = 2 << (packed_byte & 7)
         
         #Unpack the lct if it exists
-        lct = []
+        ret._lct = []
         if lct_exists:
             i = 0
             while i < lct_size:
-                color = file.unpack('3B')
-                lct.append(color)
+                ret._lct.append(stream_unpack('3B', stream))
                 i += 1
         
         #Unpack actual image data
-        lzw_min = file.unpack('B')
-        lzw = block_split(file)
+        ret._lzw_min = stream_unpack('B', stream)
+        ret._lzw = block_split(stream)
         
-        return cls(
-            gct,
-            lzw,
-            lzw_min,
-            lct=lct,
-            inter=interlace,
-            pos=(x, y),
-            size=(width, height),
-        )
+        #Recall number of colors
+        ret._ncolors = len(gct)
+        return ret
+        
+    #------------------------------------------------
+    # Dimensions
+    #------------------------------------------------
+    @property
+    def position(self):
+        '''Get the image position'''
+        return self._x, self._y
+        
+    @position.setter
+    def position(self, pos):
+        '''Update the position'''
+        x, y = pos
+        if x >= 0 and y >= 0:
+            self._x, self._y = x, y
+        else:
+            raise GifFormatError("Negative coordinates not allowed")
+        return
+        
+    @property
+    def width(self):
+        '''Get the image block width'''
+        return self._width
+        
+    @property
+    def height(self):
+        '''Get the image height'''
+        return self._height
+        
+    #------------------------------------------------
+    # Image properties
+    #------------------------------------------------
+    @property
+    def interlace(self):
+        '''Check if image is interlaced'''
+        return bool(self._interlace)
+
+    @property
+    def lct(self):
+        '''Get the local color table'''
+        return self._lct
+        
+    @lct.setter
+    def lct(self, new):
+        '''Set the lct to a new table'''
+        if self._lct and len(new) < len(self._lct):
+            #New color table will truncate colors
+            raise GifFormatError("LCT too small (%d colors), need %d" % (len(self._lct). len(new)))
+        elif len(new) < self._ncolors:
+            #New local color table cannot replace global color table
+            raise GifFormatError("Cannot convert block to LCT, too small")
+        #Replace the GCT
+        self.lct = new
+    
+    #------------------------------------------------
+    # Color table conversion
+    #------------------------------------------------
+    def update_gct(self, mapper):
+        '''Make this image start using the new GCT'''
+
+        #Generate new table
+        decompressed = self.decompress()
+        
+        def generator():
+            '''Generate the output indices'''
+            for old_index in decompressed:
+                yield mapper[old_index]
+            return
+            
+        #Compute new lzw minimum
+        out = list(generator())
+        self._lzw_min = max(2, max(out).bit_length())
+        #Compress the LZW data
+        self.compress(out)
+    
+    def convert_to_lct(self, gct):
+        '''Convert this image and the LZW data to use a local color table'''
+        #Already has LCT
+        if self._lct:
+            return
+        
+        #Generate new table
+        mapper = {}
+        lct = []
+        decompressed = self.decompress()
+        
+        def generator():
+            '''Generate the output indices'''
+            for gct_index in decompressed:
+                #Capture mapping for GCT indices
+                if gct_index not in mapper:
+                    #Map gct index to lct index
+                    mapper.setdefault(gct_index, len(lct))
+                    #Map lct index to color
+                    lct.append(gct[gct_index])
+                yield mapper[gct_index]
+            return
+            
+        #Set the lct
+        self._lct = lct
+        #Compute new lzw minimum
+        out = list(generator())
+        self._lzw_min = max(2, max(mapper.values()).bit_length())
+        #Compress the LZW data
+        self.compress(out)
+        #Update number of colors
+        self._ncolors = max(out)
+        
+    def convert_to_gct(self, gct):
+        '''Convert this image so it uses the gct'''
+        try:
+            mapper = {lct_index: gct.index(color) for lct_index, color in enumerate(self.lct)}
+            self.update_gct(mapper)
+        except ValueError:
+            raise GifFormatError("LCT not a subset of GCT, cannot convert") from None
+        return
+        
+    #------------------------------------------------
+    # LZW data
+    #------------------------------------------------
+    @property
+    def lzw(self):
+        '''Get the compressed LZW data'''
+        return self._lzw
+
+    def decompress(self):
+        '''Decodes the LZW data'''
+        return lzw_decompress(self._lzw, self._lzw_min)
+
+    def compress(self, indices):
+        '''Replace the LZW data'''
+        self._lzw = lzw_compress(indices, self._lzw_min)
         
     #------------------------------------------------
     # Encoding
@@ -430,25 +547,21 @@ class ImageBlock(GifBlock):
     def encode(self):
         '''Returns the bytes of the image block
         Ostensibly, should return its own input from the file'''
-        out = bytes([IMAGE_HEADER])
+        out = bytearray()
+        out.append(IMAGE_HEADER)
         
         #Pack the image descriptor
-        out += struct.pack('<4H', 
-            self._x,
-            self._y,
-            self._width,
-            self._height
-        )
+        out.extend(pack('<4H', self._x, self._y, self._width, self._height))
         
         #Get packed fields
         lct_exists = bool(self._lct)
-        lct_sorted = self._lct == sorted(self._lct)
+        lct_sorted = False
         
         #Construct the packed field
-        packed_byte = 0
-        packed_byte |= (lct_exists << 7)
+        packed_byte = (lct_exists << 7)
         packed_byte |= ((self._interlace & 1) << 6)
         packed_byte |= (lct_sorted << 5)
+        
         #We don't need no stinking math.log
         packed_size = 0
         temp = len(self._lct) - 1
@@ -456,39 +569,25 @@ class ImageBlock(GifBlock):
             temp >>= 1
             packed_size += 1
         packed_byte |= ((packed_size - 1) & 7)
-        lct_size = 2 << (packed_size - 1) if self._lct else 0
-        
         #Pack the packed field
-        out += packed_byte.to_bytes(1, "little")
-        
+        out.append(packed_byte)
+
         #Pack the lct if it exists
+        lct_size = 2 << (packed_size - 1) if self._lct else 0
         if lct_exists:
             i = 0
             for color in self._lct:
-                out += struct.pack('3B', *color)
+                out.extend(pack('3B', *color))
                 i += 1
             assert i <= lct_size
             while i < lct_size:
-                out += b"\0\0\0"
+                out.extend(COLOR_PAD)
                 i += 1
         
         #Pack the lzw data
-        out += self._lzw_min.to_bytes(1, "little")
-        out += block_join(self._lzw)
-        return out
-
-    #------------------------------------------------
-    # Compression
-    #------------------------------------------------
-    def decompress(self):
-        '''Decodes the LZW data'''
-        table = self._lct if self._lct else self._gct
-        return lzw_decompress(self._lzw, self._lzw_min, table)
-
-    def compress(self, indices):
-        '''Replace the LZW data'''
-        table = self._lct if self._lct else self._gct
-        self._lzw = lzw_compress(indices, self._lzw_min, table)
+        out.append(self._lzw_min)
+        out.extend(block_join(self._lzw))
+        return bytes(out)
         
 #================================================================
 # Base class for extensions
@@ -513,91 +612,111 @@ class GraphicExtension(ExtensionBlock):
         "_delay",
         "_disposal",
         "_userin",
+        "_gct",
     ]
+    
+    #Required version
+    _version = GIF89a
     
     #------------------------------------------------
     # Construction
     #------------------------------------------------
-    def __init__(self, *, trans=0, index=0, delay=0, disposal=0, userin=0):
+    def __init__(self):
         '''Load the graphic extension block'''
-        self._trans = bool(trans)
-        if not 0 <= index < 256:
-            raise ValueError("Index must be in [0, 256)")
-        self._index = index
-        self._delay = delay
-        self._disposal = bool(disposal)
-        self._userin = bool(userin)
+        self._trans = False
+        self._index = 0
+        self._delay = 0
+        self._disposal = 0
+        self._userin = False
         
     #------------------------------------------------
     # Decoding
     #------------------------------------------------
     @classmethod
-    def decode(cls, file):
+    def decode(cls, stream):
         ''' Reads bytes from already open file.
             Should happen after block header 0x21f9 is discovered
         '''
+        ret = cls()
+        
         #Unpack graphics extension block
-        block_size, packed_byte = file.unpack('2B')
+        block_size, packed_byte = stream_unpack('2B', stream)
         if block_size != GRAPHIC_SIZE:
-            raise GifFormatError("Corrupt graphic extension")
+            raise GifFormatError("Bad graphic extension size")
         
         #Unpack the packed byte
-        disposal = (packed_byte >> 2) & 0x7
-        userin = (packed_byte >> 1) & 1
-        trans_flag = packed_byte & 1
+        ret._disposal = (packed_byte >> 2) & 0x7
+        ret._userin = (packed_byte >> 1) & 1
+        ret._trans = packed_byte & 1
         
         #Unpack extension block
-        delay = file.unpack('<H')
-        trans_index = file.unpack('B')
+        ret._delay, ret._index, footer = stream_unpack('<HBB', stream)
         
-        #Unpack block finish
-        if not file.unpack('B') == BLOCK_FOOTER:
-            raise GifFormatError("Corrupt graphic extension")
-        return cls(
-            trans=trans_flag,
-            index=trans_index,
-            delay=delay,
-            disposal=disposal,
-            userin=userin,
-        )
+        #Unpack block footer
+        if not footer == BLOCK_FOOTER:
+            raise GifFormatError("Bad graphic extension footer")
+        return ret
+        
+    #------------------------------------------------
+    # Accessors
+    #------------------------------------------------
+    @property
+    def trans(self):
+        '''Get the index of transparency, or None if nontransparent'''
+        if self._trans:
+            return self._index
+        return None
+        
+    @trans.setter
+    def trans(self, value):
+        '''Set the transparent color'''
+        if value is None:
+            self._trans = False
+            self._index = 0
+        else:
+            self._trans = True
+            self._index = value
+        return
+    
+    @property
+    def delay(self):
+        '''Gets the actual delay time in milliseconds'''
+        return self._delay / 100
+        
+    @delay.setter
+    def delay(self, value):
+        '''Set the delay time in milliseconds'''
+        self._delay = int(value * 100)
+    
+    #------------------------------------------------
+    # Mystery properties
+    #------------------------------------------------
+    @property
+    def disposal(self):
+        '''Get the disposal method'''
+        return self._disposal
+        
+    @property
+    def user_input(self):
+        '''Check if the user input flag is set'''
+        return bool(self._userin)
         
     #------------------------------------------------
     # Encoding
     #------------------------------------------------
     def encode(self):
         '''Returns the bytes of the graphic extension block'''
-        out = bytes([BLOCK_HEADER, GRAPHIC_HEADER,GRAPHIC_SIZE])
 
         #Pack the packed byte
-        packed_byte = 0
-        packed_byte |= ((self._disposal & 7) << 2)
+        packed_byte = ((self._disposal & 7) << 2)
         packed_byte |= ((self._userin & 1) << 1)
         packed_byte |= (self._trans & 1)
-        out += packed_byte.to_bytes(1, "little")
+        
+        out = bytearray([BLOCK_HEADER, GRAPHIC_HEADER, GRAPHIC_SIZE, packed_byte])
         
         #Pack the extension block
-        out += struct.pack('<HBB', self._delay, self._index, 0)
-        return out
-
-    #------------------------------------------------
-    # Accessors
-    #------------------------------------------------
-    def trans(self):
-        '''Get the index of transparency, or None if nontransparent'''
-        if self._trans:
-            return self._index
-        return None
-    
-    def delay(self):
-        '''Gets the actual delay time in milliseconds'''
-        return self._delay / 100
-        
-    #------------------------------------------------
-    # Usefullness test
-    #------------------------------------------------
-    def useful(self):
-        '''Check if this extension block is doing anything'''
-        return bool(self._trans | self._delay | self._disposal | self._userin)
+        out.extend(pack('<HBB', self._delay, self._index, GRAPHIC_FOOTER))
+        return bytes(out)
 
 #================================================================
 # GIF components : Comment extension block
@@ -607,6 +726,10 @@ class CommentExtension(ExtensionBlock):
         There can be arbitrarily many of these in one GIF
         Don't use this because it's useless
     '''
+    
+    #Require version
+    _deprecated = True
+    _version = GIF89a
     
     #------------------------------------------------
     # Construction
@@ -619,13 +742,26 @@ class CommentExtension(ExtensionBlock):
     # Decoding
     #------------------------------------------------
     @classmethod
-    def decode(cls, file):
+    def decode(cls, stream):
         ''' Reads bytes from the already open file.
             Should happen after block header 0x21fe is found
         '''
-        comment = block_split(file).decode("ascii")
+        comment = block_split(stream).decode("ascii")
         return cls(comment)
         
+    #------------------------------------------------
+    # Properties
+    #------------------------------------------------
+    @property
+    def comment(self):
+        '''Get the comment text'''
+        return self._comment
+        
+    @comment.setter
+    def comment(self, value):
+        '''Set the comment to a new string'''
+        self._comment = str(value)
+
     #------------------------------------------------
     # Encoding
     #------------------------------------------------
@@ -645,7 +781,7 @@ class PlainTextExtension(ExtensionBlock):
     '''
     
     __slots__ = [
-        "_data",
+        "_text",
         "_fg",
         "_bg",
         "_gridx",
@@ -656,85 +792,129 @@ class PlainTextExtension(ExtensionBlock):
         "_cellh",
     ]
     
+    #Class is deprecated
+    _deprecated = True
+    _version = GIF89a
+    
     #------------------------------------------------
     # Construction
     #------------------------------------------------
-    def __init__(self, data='', *, color=None, grid=None, size=None, cell=None):
+    def __init__(self):
         ''' Construct extension given properties '''
-        self._data = data
-        #Unpack colors
-        self._fg, self._bg = color if color else (1, 0)
-        if not(0 <= self._fg < 256 and 0 <= self._bg < 256):
-            raise ValueError("Color indices must be in [0, 256)")
-        #Unpack coordinates
-        self._gridx, self._gridy = grid if grid else (0, 0)
-        if not(self._gridx >= 0 and self._gridy >= 0):
-            raise ValueError("Grid coordinates must be >= 0")
-        #Unpack size
-        self._gridw, self._gridh = size if size else (0, 0)
-        if not(self._gridw >= 0 and self._gridh >= 0):
-            raise ValueError("Grid size must be >= 0")
-        #Unpack cell size
-        self._cellw, self._cellh = cell if cell else (0, 0)
-        if not(self._cellw >= 0 and self._cellh >= 0):
-            raise ValueError("Cell size must be >= 0")
-        return
+        self._text = ""
+        self._fg, self._bg = 0, 0
+        self._gridx, self._gridy = 0, 0
+        self._gridw, self._gridh = 0, 0
+        self._cellw, self._cellh = 0, 0
         
     #------------------------------------------------
     # Decoding
     #------------------------------------------------
     @classmethod
-    def decode(cls, file):
+    def decode(cls, stream):
         ''' Reads bytes from the already open file.
             Should happen after block header 0x2101 is found
         '''
+        ret = cls()
+        
         #Read the block size
-        block_size = file.unpack('B')
+        block_size = stream_unpack('B', stream)
         if block_size != TEXT_SIZE:
             raise GifFormatError("Corrupt plaintext extension")
         
         #Read information
-        left, top = file.unpack('<2H')
-        width, height = file.unpack('<2H')
-        cell_width, cell_height = file.unpack('2B')
-        fg, bg = file.unpack('2B')
-        data = block_split(file).decode("ascii")
+        ret._gridx, ret._gridy, *rest = stream_unpack('<4H4B', stream)
+        ret._gridw, ret._gridh, *rest = rest
+        ret._cellw, ret._cellh, *rest = rest
+        fg, bg = rest
+        ret._text = block_split(stream).decode("ascii")
         
-        return cls(
-            data,
-            color=(fg, bg),
-            grid=(left, top),
-            size=(width, height),
-            cell=(cell_width, cell_height),
-        )
+        return ret
+        
+    #------------------------------------------------
+    # Properties
+    #------------------------------------------------
+    @property
+    def text(self):
+        '''Get the string being displayed'''
+        return self._text
+
+    def insert_text(self, text, char_width, char_height):
+        '''Set the text associated with this display'''
+        self._text = text = str(text)
+        
+        #Set up the character cells
+        self._cellw = char_width
+        self._cellh = char_height
+        
+        #Set up the gridding of monospaced characters
+        self._gridw = char_width * len(text)
+        self._gridh = char_height
+        
+    @property
+    def position(self):
+        '''Get the text position'''
+        return self._gridx, self._gridy
+        
+    @position.setter
+    def position(self, value):
+        '''Set the grid position'''
+        x, y = value
+        if x >= 0 and y >= 0:
+            self._gridx, self._gridy = x, y
+        else:
+            raise GifFormatError("Coordinates cannot be negative")
+        return
+        
+    @property
+    def cell(self):
+        '''Get the cell dimensions'''
+        return self._cellw, self._cellh
+        
+    @property
+    def grid(self):
+        '''Get the grid dimensions'''
+        return self._gridw, self._gridh
+    
+    #------------------------------------------------
+    # Coloring
+    #------------------------------------------------
+    @property
+    def foreground(self):
+        '''Get the foreground color index'''
+        return self._fg
+        
+    @foreground.setter
+    def foreground(self, value):
+        '''Set the foreground color'''
+        self._fg = value
+        
+    @property
+    def background(self):
+        '''Get the background color index'''
+        return self._bg
+        
+    @background.setter
+    def background(self, value):
+        '''Set the background color'''
+        self._bg = value
     
     #------------------------------------------------
     # Encoding
     #------------------------------------------------
     def encode(self):
         '''Returns the bytes of the plain text extension block'''
-        out = bytes([BLOCK_HEADER, TEXT_HEADER, TEXT_SIZE])
+        out = bytearray([BLOCK_HEADER, TEXT_HEADER, TEXT_SIZE])
         
         #Pack the grid position
-        out += struct.pack(
-            "<4H", 
-            self._gridx,
-            self._gridy,
-            self._gridw,
-            self._gridh,
-        )
+        out.extend(pack("<4H", self._gridx, self._gridy, self._gridw, self._gridh))
         
         #Pack the cell properties and colors
-        out += struct.pack("4B",
-            self._cellw,
-            self._cellh,
-            self._fg,
-            self._bg,
-        )
+        out.extend(pack("4B", self._cellw, self._cellh, self._fg, self._bg))
         
         #Pack the text data
-        out += block_join(self._data.encode("ascii"))
-        return out
+        out.extend(block_join(self._text.encode("ascii")))
+        return bytes(out)
         
 #================================================================
 # GIF components : Application Extension
@@ -750,49 +930,70 @@ class ApplicationExtension(ExtensionBlock):
         "_data",
     ]
     
+    #Class is deprecated
+    _deprecated = True
+    _version = GIF89a
+    
     #------------------------------------------------
     # Construction
     #------------------------------------------------
-    def __init__(self, ident='', auth='', data=''):
+    def __init__(self):
         ''' Initialize the block from its paramaters'''
-        self._ident = ident
-        self._auth = auth
-        self._data = data
+        self._ident = ""
+        self._auth = 0
+        self._data = b""
 
     #------------------------------------------------
     # Decoding
     #------------------------------------------------
     @classmethod
-    def decode(cls, file):
+    def decode(cls, stream):
         ''' Decode a new application extension from the given file
             Reads bytes from the already open file.
             Should happen after block header 0x21ff is found
         '''
+        ret = cls()
+        
         #Read the block size
-        block_size = file.unpack('B')
+        block_size = stream_unpack('B', stream)
         if not block_size == APPLICATION_SIZE:
             raise GifFormatError("Corrupt application extension")
         
         #Read the application identifier
-        ident = file.read(8).decode("ascii")
-        
-        ## This bit is sketchy:
-        # * onicos says the application data block begins immediately
-        #
-        # * mattherflickinger says the next field is a 3-byte authentication
-        #   code, and THEN the block data follows. Who knows? 
-        #   Nobody uses this...
-        #   Because the block size is 0xb == 0x8 + 0x3, assume the auth code
-        #   is supposed to be there.
+        ret._ident = stream.read(8).decode("ascii")
         
         #Read the application identifier
-        auth = file.read(3).decode("ascii")
+        ret._auth = int.from_bytes(stream.read(3), "little")
         
-        #Read the application data
-        data = block_split(file)
+        #Read the application data (bytes)
+        ret._data = block_split(stream)
         
-        return cls(ident, auth, data)
+        return ret
         
+    #------------------------------------------------
+    # Properties
+    #------------------------------------------------
+    @property
+    def application(self):
+        '''Get the application owning this extension'''
+        return self._ident
+        
+    @property
+    def auth_code(self):
+        '''Get the authentication code'''
+        return self._auth
+        
+    #------------------------------------------------
+    # Interaction
+    #------------------------------------------------
+    def read(self, application, auth_code):
+        '''Return the data only if the correct application and auth code are passed'''
+        if self.application == application and self.auth_code == auth_code:
+            #it offsers some protection, but basically can just grab the data
+            #Goal is to have some sort of protocol for reading
+            return self._data
+        raise RuntimeError("Failed to authenticate application")
+
     #------------------------------------------------
     # Encoding
     #------------------------------------------------
@@ -811,7 +1012,6 @@ class Gif(object):
     '''Opens the gif image'''
     
     __slots__ = [
-        "_version",
         "_width",
         "_height",
         "_bgcolor",
@@ -822,49 +1022,47 @@ class Gif(object):
     ]
     
     #------------------------------------------------
-    # Gif construction
+    # Construction
     #------------------------------------------------
-    def __init__(self, data):
+    def __init__(self, src=None):
         '''Opens the GIF image'''
-        #Load GIF from file or bytes object
-        if isinstance(data, str):
-            #Try opening file
-            with open(data, 'rb') as temp:
-                data = temp.read()
-        if type(data) not in (bytes, bytearray):
-            raise TypeError("Data must be bytes or filename")
-        file = ByteStream(data)
         
-        #--- Check header ---
-        header = file.read(3).decode("ascii")
+        #Check null init
+        if src is None:
+            self._width = 0
+            self._height = 0
+            self._bgcolor = 0
+            self._aspect = 0
+            self._res = 7
+            self._gct = []
+            self._blocks = []
+            return
+        
+        #Check where loading from
+        if isinstance(src, str):
+            stream = open(filename, 'rb')
+        else:
+            stream = BytesIO(data)
+        
+        #Check header
+        header = stream.read(3).decode("ascii")
         if header != GIF_HEADER:
-            raise GifFormatError(
-                "Bad header, expected %s but found %s" % (
-                    GIF_HEADER,
-                    header
-                )
-            )
+            raise GifFormatError("Bad header: %s" % (GIF_HEADER, header))
             
-        #--- Check version ---
-        version = file.read(3).decode("ascii")
-        if version not in (GIF_87A, GIF_89A):
-            raise GifFormatError(
-                "Bad version: %s" % version
-            )
-        self._version = version
+        #Check version
+        version = stream.read(3).decode("ascii")
+        if version not in (GIF87a, GIF89a):
+            raise GifFormatError("Bad version: %s" % version)
 
-        #--- Unpack image descriptor ---
-        self._width, self._height = file.unpack('<2H')
-        packed_byte, self._bgcolor, aspect_ratio = file.unpack('3B')
+        #Check image descriptor
+        self._width, self._height, *rest = stream_unpack("<2H3B", stream)
+        packed_byte, self._bgcolor, self._aspect = rest
         
         #Unpack the packed byte
         gct_exists = (packed_byte >> 7) & 1
         self._res = (packed_byte >> 4) & 7 #Bits per pixel?
-        sorted_flag = (packed_byte >> 3) & 1
+        gct_sorted = (packed_byte >> 3) & 1
         gct_size = 2 << (packed_byte & 7)
-
-        #Unpack pixel aspect ratio (according to matthewflickinger)
-        self._aspect = (aspect_ratio + 15) >> 6 if aspect_ratio else 0
             
         #Unpacking the GCT
         self._gct = []
@@ -872,103 +1070,158 @@ class Gif(object):
             i = 0
             while i < gct_size:
                 #color is a tuple (r, g, b)
-                color = file.unpack('3B')
-                self._gct.append(color)
+                self._gct.append(stream_unpack('3B', stream))
                 i += 1
         
         #Parse remaining blocks until reach the trailer
-        self._blocks = list()
-        temp = file.unpack('B')
-        while temp != GIF_FOOTER:
-            if temp == BLOCK_HEADER:
+        self._blocks = []
+        head = ord(stream.read(1))
+        
+        while head != GIF_FOOTER:
+            
+            if head == BLOCK_HEADER:
                 #Discovered extension block
-                ext_label = file.unpack('B')
-                if ext_label == GRAPHIC_HEADER:
+                label = ord(stream.read(1))
+                if label == GRAPHIC_HEADER:
                     #Error check for invalid configuration
-                    if self._blocks:
-                        if isinstance(self._blocks[-1], GraphicExtension):
-                            raise GifFormatError(
-                                "Two consecutive graphic extension blocks"
-                            )
+                    if self._blocks and isinstance(self._blocks[-1], GraphicExtension):
+                        raise GifFormatError("Two consecutive graphic extension blocks")
                     #Load new header
-                    self._blocks.append(GraphicExtension.decode(file))
-                elif ext_label == COMMENT_HEADER:
+                    block = GraphicExtension.decode(stream)
+                elif label == COMMENT_HEADER:
                     #Load new comment
-                    self._blocks.append(CommentExtension.decode(file))
-                elif ext_label == TEXT_HEADER:
+                    block = CommentExtension.decode(stream)
+                elif label == TEXT_HEADER:
                     #Load new text
-                    self._blocks.append(PlainTextExtension.decode(file))
-                elif ext_label == APPLICATION_HEADER:
+                    block = PlainTextExtension.decode(stream)
+                elif label == APPLICATION_HEADER:
                     #Load new application data
-                    self._blocks.append(ApplicationExtension.decode(file))
+                    block = ApplicationExtension.decode(stream)
                 else:
-                    raise GifFormatError(
-                        "Invalid extension label: %x" % ext_label
-                    )
-            elif temp == IMAGE_HEADER:
+                    raise GifFormatError("Invalid extension label: %x" % label)
+
+            elif head == IMAGE_HEADER:
                 #Discovered image data
-                self._blocks.append(ImageBlock.decode(file, self._gct))
+                block = ImageBlock.decode(stream, self._gct)
             else:
                 #Invalid block
-                raise GifFormatError("Invalid block header: %x" % temp)
+                raise GifFormatError("Invalid block header: %x" % head)
+            
+            #Save new block in blocks list
+            self._blocks.append(block)
+                
             #Done with this block - get next header
-            temp = file.unpack('B')
+            head = ord(stream.read(1))
+
         #Done with all blocks
         return
+        
+    #------------------------------------------------
+    # Accessors
+    #------------------------------------------------
+    def version(self):
+        '''Get the GIF version'''
+        versions = [b.version() for b in self._blocks]
+        if GIF89a in versions:
+            return GIF89a
+        return GIF87a
+    
+    @property
+    def width(self):
+        '''Get the GIF width'''
+        return self._width
+        
+    @property
+    def height(self):
+        '''Get the GIF height'''
+        return self._height
+        
+    @property
+    def color_resolution(self):
+        '''Get the color resolution'''
+        return self._res + 1
+        
+    @property
+    def aspect_ratio(self):
+        '''Get the aspect ratio'''
+        #According to matthewflickinger
+        return ((self._aspect + 15) >> 6) if self._aspect else 0
+        
+    #------------------------------------------------
+    # Background color
+    #------------------------------------------------
+    @property
+    def background(self):
+        '''Get the background color'''
+        if self._gct:
+            #GCT exists, so background color exists
+            return self._bgcolor
+        return None
+        
+    @background.setter
+    def background(self, value):
+        '''Sets the background color'''
+        self._bgcolor = value
+        
+    #------------------------------------------------
+    # Blocks accessor
+    #------------------------------------------------
+    @property
+    def blocks(self):
+        '''Get the GIF blocks'''
+        return self._blocks
+
+    def blocks_filter(self, block_cls):
+        '''Get all blocks of the given class'''
+        return [b for b in self._blocks if isinstance(b, block_cls)]
+        
+    #------------------------------------------------
+    # GCT modification
+    #------------------------------------------------
+    @property
+    def gct(self):
+        '''Get the GCT'''
+        return self._gct
+        
+    @gct.setter
+    def gct(self, new):
+        '''Replace the GCT with a new table'''
+        if len(new) < len(self._gct):
+            #New color table will truncate colors
+            raise GifFormatError("GCT too small (%d colors), need %d" % (len(self._gct). len(new)))
+        #Replace the GCT
+        self._gct = new
         
     #------------------------------------------------
     # GIF encoding
     #------------------------------------------------
     def encode(self):
         '''Pack the entire GIF image'''
-        out = bytes()
-        
-        #Pack name and version
-        if self._version not in (GIF_87A, GIF_89A):
-            raise GifFormatError("Bad version: %s" % self._version)
-        out += (GIF_HEADER + self._version).encode("ascii")
+
+        #Pack name and version (standardize to 89a)
+        out = bytearray((GIF_HEADER + self.version()).encode("ascii"))
         
         #Pack header attributes
-        if self._width >= 0 and self._height >= 0:
-            out += struct.pack("<HH", self._width, self._height)
-        else:
-            raise GifFormatError("Image dimensions must be positive")
+        out.extend(pack("<HH", self._width, self._height))
         
         #Get packed byte fields
         gct_exists = bool(self._gct)
-        gct_sorted = self._gct == sorted(self._gct)
-        
-        #Check color resolution
-        if self._res != self._res & 7:
-            raise GifFormatError(
-                "Bad color res: %x, must be in [0, 7]" % self._color_res
-            )
         
         #Construct the packed byte
-        packed_byte = 0
-        packed_byte |= (gct_exists << 7)
+        packed_byte = (gct_exists << 7)
         packed_byte |= ((self._res & 7) << 4)
-        packed_byte |= (gct_sorted << 3)
+        packed_byte |= (False << 3)
         
-        #Error check GCT
+        #Determine packed GCT size
         packed_size = 0
-        temp = len(self._gct) - 1
-        if temp > 256:
-            raise GifFormatError("GCT size must be <= 256")
-        #Determine packed size
+        temp = len(self._gct) - 1 #Off by one error
         while temp > 0:
             temp >>= 1
             packed_size += 1
         packed_byte |= ((packed_size - 1) & 7)
         
-        #Recover the aspect ratio (what is this even FOR)
-        if self._aspect:
-            aspect_ratio = (self._aspect << 6) - 15
-        else:
-            aspect_ratio = 0
-        
         #Pack the packed byte and other fields
-        out += struct.pack("3B", packed_byte, self._bgcolor, aspect_ratio)
+        out.extend(pack("3B", packed_byte, self._bgcolor, self._aspect))
         
         #Pack the gct
         gct_size = 2 << (packed_size - 1)
@@ -976,80 +1229,77 @@ class Gif(object):
             #Pack entire GCT
             i = 0
             for color in self._gct:
-                out += struct.pack('3B', *color)
+                out.extend(pack('3B', *color))
                 i += 1
+            
             assert i <= gct_size
             #Pad with null colors
             while i < gct_size:
-                out += b"\0\0\0"
+                out.extend(COLOR_PAD)
                 i += 1
                 
         #Pack the ramaining blocks (these supply their own headers)
         for block in self._blocks:
-            out += block.encode()
+            out.extend(block.encode())
             
         #Pack the trailer
-        out += GIF_FOOTER.to_bytes(1, "little")
-        #Done
-        return out
-        
-    #------------------------------------------------
-    # Accessors
-    #------------------------------------------------
-    @property
-    def gct(self):
-        '''Get the GCT'''
-        return self._gct
-        
-    @property
-    def blocks(self):
-        '''Get the GIF blocks'''
-        return self._blocks
-        
+        out.extend(GIF_FOOTER.to_bytes(1, "little"))
+        return bytes(out)
+
     #------------------------------------------------
     # Mutation
     #------------------------------------------------
+    def convert_gif87a(self):
+        '''Convert the image to GIF87a format by discarding other blocks'''
+        i = 0
+        while i < len(self._blocks):
+            if self._blocks[i].version() != GIF87a:
+                del self._blocks[i]
+            else:
+                i += 1
+        return
+    
     def optimize(self):
         ''' Optimize the size of this image by removing extension blocks
             and resizing color tables.
         '''
-        isize = len(self.encode())
-        global_max = 0
+        initial_size = len(self.encode())
+        
         #Remove useless blocks
         i = 0
         while i < len(self._blocks):
             block = self._blocks[i]
-            remove = False
-            if isinstance(block, ExtensionBlock):
-                #Optimize extensions
-                if isinstance(block, GraphicExtension):
-                    remove = not block.useful()
-                else:
-                    remove = True
-            else:
-                #Optimize local color tables
-                if block._lct:
-                    indices = lzw_decompress(
-                        block._lzw, block._lzw_min, block._lct,
-                    )
-                    biggest = max(indices)
-                    if biggest+1 < len(block._lct):
-                        del block._lct[biggest+1:]
-                else:
-                    biggest = max(
-                        lzw_decompress(block._lzw, block._lzw_min, self._gct)
-                    )
-                    if biggest > global_max:
-                        global_max = biggest
-            if remove:
+            if self._blocks[i].deprecated():
                 del self._blocks[i]
             else:
                 i += 1
-        #Optimize the global color table
-        if global_max+1 < len(self._gct):
-            del self._gct[global_max+1:]
-        fsize = len(self.encode())
-        return isize - fsize
+                
+        #Optimize the GCT
+        used = set()
+        for block in self.blocks:
+            #Images that use GCT
+            if isinstance(block, ImageBlock) and not block.lct:
+                used.update(block.decompress())
+            elif isinstance(block, GraphicExtension):
+                if block.trans:
+                    used.add(block.trans)
+            elif isinstance(block, PlainTextExtension):
+                used.add(block.foreground)
+                used.add(block.background)
+        
+        #Get mapping from old GCT to new
+        used_list = list(enumerate(used))
+        mapper = {old_index: new_index for new_index, old_index in used_list}
+        for block in self._blocks:
+            if isinstance(block, ImageBlock):
+                block.update_gct(mapper)
+
+        #Store the new gct
+        self._gct = [self._gct[i] for _, i in used_list]
+
+        #Return delta in size
+        final_size = len(self.encode())
+        return initial_size - final_size
 
 #================================================================
 # Testing
@@ -1058,22 +1308,22 @@ if __name__ == "__main__":
 
     from time import time
 
-    def testGif(path):
+    def test(path):
         '''Unit test on one gif image'''
         print("Testing %s" % path)
         #Time the opening of the GIF image
         ti = time()
-        g = Gif(path)
+        g = Gif(filename=path)
         tf = time()
         print("Opened in %f seconds" % (tf - ti))
         ti = tf
         #Time the decompression of the image block
-        block = g.images()[0]
+        block = g.blocks_filter(ImageBlock)[0]
         d = list(block.decompress())
         tf = time()
         print("Decompressed in %f seconds" % (tf - ti))
         #Ensure the image block is actually valid
-        assert len(d) == (g._height * g._width)
+        assert len(d) == (g.height * g.width)
         ti = tf
         #Time the recompression of the image block
         block.compress(d)
@@ -1083,14 +1333,29 @@ if __name__ == "__main__":
         #Uncompress the compress
         de = list(block.decompress())
         assert d == de
+        #Check encoding
+        ti - tf
+        g.encode()
+        tf = time()
+        print("Encoded in %f seconds!" % (tf - ti))
         #Done!
         print("Passed test!\n")
 
-    testGif(r"dev\image\test\sample_1.gif")
-    testGif(r"dev\image\test\writegif.gif")
-    testGif(r"dev\image\test\animated.gif")
-    testGif(r"dev\image\test\test.GIF")
-    testGif(r"dev\image\test\audrey.gif")
-    testGif(r"dev\image\test\audrey_big.gif")
+    """test(r"..\dev\image-test\sample_1.gif")
+    test(r"..\dev\image-test\writegif.gif")
+    test(r"..\dev\image-test\bitdepth1.gif")
+    test(r"..\dev\image-test\bitdepth2.gif")
+    test(r"..\dev\image-test\bitdepth4.gif")
+    test(r"..\dev\image-test\animated.gif")
+    test(r"..\dev\image-test\test.GIF")
+    test(r"..\dev\image-test\audrey.gif")
+    test(r"..\dev\image-test\audrey_big.gif")
+    test(r"..\dev\image-test\audrey_hq.gif")"""
 
+    g = Gif(filename="../dev/image-test/audrey_big.gif")
+    gfx, image = g.blocks
+    print(g.optimize())
+    g.convert_gif87a()
+    with open("../dev/image-test/opt_test.gif", "wb") as file:
+        file.write(g.encode())
     

@@ -1040,9 +1040,9 @@ class Gif(object):
         
         #Check where loading from
         if isinstance(src, str):
-            stream = open(filename, 'rb')
+            stream = open(src, 'rb')
         else:
-            stream = BytesIO(data)
+            stream = BytesIO(src)
         
         #Check header
         header = stream.read(3).decode("ascii")

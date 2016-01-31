@@ -1352,10 +1352,10 @@ if __name__ == "__main__":
     test(r"..\dev\image-test\audrey_big.gif")
     test(r"..\dev\image-test\audrey_hq.gif")"""
 
-    g = Gif(filename="../dev/image-test/audrey_big.gif")
+    g = Gif(filename="../developer/image-test/audrey_big.gif")
     gfx, image = g.blocks
     print(g.optimize())
     g.convert_gif87a()
-    with open("../dev/image-test/opt_test.gif", "wb") as file:
+    with open("../developer/image-test/opt_test.gif", "wb") as file:
         file.write(g.encode())
     

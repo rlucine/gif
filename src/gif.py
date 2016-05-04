@@ -1047,7 +1047,7 @@ class Gif(object):
         #Check header
         header = stream.read(3).decode("ascii")
         if header != GIF_HEADER:
-            raise GifFormatError("Bad header: %s" % (GIF_HEADER, header))
+            raise GifFormatError("Bad header: %s" % header)
             
         #Check version
         version = stream.read(3).decode("ascii")
@@ -1313,7 +1313,7 @@ if __name__ == "__main__":
         print("Testing %s" % path)
         #Time the opening of the GIF image
         ti = time()
-        g = Gif(filename=path)
+        g = Gif(path)
         tf = time()
         print("Opened in %f seconds" % (tf - ti))
         ti = tf
@@ -1352,7 +1352,7 @@ if __name__ == "__main__":
     test(r"..\dev\image-test\audrey_big.gif")
     test(r"..\dev\image-test\audrey_hq.gif")"""
 
-    g = Gif(filename="../developer/image-test/audrey_big.gif")
+    g = Gif("../developer/image-test/audrey_big.gif")
     gfx, image = g.blocks
     print(g.optimize())
     g.convert_gif87a()

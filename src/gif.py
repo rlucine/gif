@@ -1341,16 +1341,16 @@ if __name__ == "__main__":
         #Done!
         print("Passed test!\n")
 
-    """test(r"..\dev\image-test\sample_1.gif")
-    test(r"..\dev\image-test\writegif.gif")
-    test(r"..\dev\image-test\bitdepth1.gif")
-    test(r"..\dev\image-test\bitdepth2.gif")
-    test(r"..\dev\image-test\bitdepth4.gif")
-    test(r"..\dev\image-test\animated.gif")
-    test(r"..\dev\image-test\test.GIF")
-    test(r"..\dev\image-test\audrey.gif")
-    test(r"..\dev\image-test\audrey_big.gif")
-    test(r"..\dev\image-test\audrey_hq.gif")"""
+    # test(r"..\dev\image-test\sample_1.gif")
+    # test(r"..\dev\image-test\writegif.gif")
+    # test(r"..\dev\image-test\bitdepth1.gif")
+    # test(r"..\dev\image-test\bitdepth2.gif")
+    # test(r"..\dev\image-test\bitdepth4.gif")
+    # test(r"..\dev\image-test\animated.gif")
+    # test(r"..\dev\image-test\test.GIF")
+    # test(r"..\dev\image-test\audrey.gif")
+    # test(r"..\dev\image-test\audrey_big.gif")
+    # test(r"..\dev\image-test\audrey_hq.gif")
 
     g = Gif("../developer/image-test/audrey_big.gif")
     gfx, image = g.blocks

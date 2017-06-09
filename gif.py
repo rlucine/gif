@@ -1305,7 +1305,6 @@ class Gif(object):
 # Testing
 #================================================================
 if __name__ == "__main__":
-
     from time import time
 
     def test(path):
@@ -1341,21 +1340,14 @@ if __name__ == "__main__":
         #Done!
         print("Passed test!\n")
 
-    # test(r"..\dev\image-test\sample_1.gif")
-    # test(r"..\dev\image-test\writegif.gif")
-    # test(r"..\dev\image-test\bitdepth1.gif")
-    # test(r"..\dev\image-test\bitdepth2.gif")
-    # test(r"..\dev\image-test\bitdepth4.gif")
-    # test(r"..\dev\image-test\animated.gif")
-    # test(r"..\dev\image-test\test.GIF")
-    # test(r"..\dev\image-test\audrey.gif")
-    # test(r"..\dev\image-test\audrey_big.gif")
-    # test(r"..\dev\image-test\audrey_hq.gif")
-
-    g = Gif("../developer/image-test/audrey_big.gif")
+    # Encode / decode test
+    test("test/audrey.gif")
+	
+    # Copying test
+    g = Gif("test/audrey.gif")
     gfx, image = g.blocks
     print(g.optimize())
     g.convert_gif87a()
-    with open("../developer/image-test/opt_test.gif", "wb") as file:
+    with open("test/copy.gif", "wb") as file:
         file.write(g.encode())
     

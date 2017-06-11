@@ -38,9 +38,31 @@ GIF_HEADER = "GIF"
 GIF87a = "87a"
 GIF89a = "89a"
 GIF_FOOTER = 0x3B
-
-COLORS_MAX = 256
 COLOR_PAD = b"\0\0\0"
+
+#================================================================
+# Export
+#================================================================
+__all__ = [
+	# Version constants
+	"GIF87a",
+	"GIF89a",
+	
+	# Error classes
+	"GifFormatError",
+	
+	# Gif Block classes
+	"GifBlock",
+	"ExtensionBlock",
+	"ApplicationExtension",
+	"CommentExtension",
+	"GraphicExtension",
+	"PlainTextExtension",
+	"ImageBlock",
+	
+	# Gif images
+	"Gif",
+]
 
 #================================================================
 # Error classes

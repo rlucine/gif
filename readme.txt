@@ -9,13 +9,18 @@ DESCRIPTION
     therefore each class has generally public attributes and is intended to be
     used as a struct. However, some quick functions are included due to the
     relative efficiency.
+        
+        Two command-line invocations are provided:
+        * gif.py test <file.gif>
+        This decompresses and recompresses the image to test the module.
+        
+        * gif.py optimize <input.gif> <output.gif>
+        This compresses the image by removing extra colors and blocks.
 
 CLASSES
     builtins.RuntimeError(builtins.Exception)
         GifFormatError
     builtins.object
-        BitReader
-        BitWriter
         Gif
         GifBlock
             ExtensionBlock
@@ -71,31 +76,6 @@ CLASSES
      |  
      |  version() from builtins.type
      |      Get the version required for this block
-    
-    class BitReader(builtins.object)
-     |  Reads bits from a byte string
-     |  
-     |  Methods defined here:
-     |  
-     |  __init__(self, byte_string)
-     |      Initialize the reader with a complete byte string
-     |  
-     |  read(self, amount)
-     |      Read bits from the byte string and returns int
-    
-    class BitWriter(builtins.object)
-     |  Writes a byte string given bit inputs
-     |  
-     |  Methods defined here:
-     |  
-     |  __init__(self)
-     |      Initialize the reader with a complete byte string
-     |  
-     |  to_bytes(self)
-     |      Returns the bytes
-     |  
-     |  write(self, num, pad=0)
-     |      Write bits to the byte string
     
     class CommentExtension(ExtensionBlock)
      |  Initialize the comment extension from the file
@@ -466,59 +446,12 @@ CLASSES
      |  version() from builtins.type
      |      Get the version required for this block
 
-FUNCTIONS
-    block_join(raw_bytes)
-        Dump the block as bytes
-    
-    block_split(stream)
-        Parses through sub-blocks and returns the entire byte string
-    
-    calcsize(...)
-        calcsize(fmt) -> integer
-        
-        Return size in bytes of the struct described by the format string fmt.
-    
-    lzw_compress(indices, lzw_min)
-        A more optimized compression algorithm that uses a hash
-        instead of a list
-    
-    lzw_decompress(raw_bytes, lzw_min)
-        Decompress the LZW data and yields output
-    
-    pack(...)
-        pack(fmt, v1, v2, ...) -> bytes
-        
-        Return a bytes object containing the values v1, v2, ... packed according
-        to the format string fmt.  See help(struct) for more on format strings.
-    
-    stream_unpack(fmt, stream)
-        Unpack the next struct from the stream
-    
-    unpack(...)
-        unpack(fmt, buffer) -> (v1, v2, ...)
-        
-        Return a tuple containing values unpacked according to the format string
-        fmt.  The buffer's size in bytes must be calcsize(fmt). See help(struct)
-        for more on format strings.
-
 DATA
-    APPLICATION_HEADER = 255
-    APPLICATION_SIZE = 11
-    BLOCK_FOOTER = 0
-    BLOCK_HEADER = 33
-    COLORS_MAX = 256
-    COLOR_PAD = b'\x00\x00\x00'
-    COMMENT_HEADER = 254
     GIF87a = '87a'
     GIF89a = '89a'
-    GIF_FOOTER = 59
-    GIF_HEADER = 'GIF'
-    GRAPHIC_FOOTER = 0
-    GRAPHIC_HEADER = 249
-    GRAPHIC_SIZE = 4
-    IMAGE_HEADER = 44
-    TEXT_HEADER = 1
-    TEXT_SIZE = 12
+    __all__ = ['GIF87a', 'GIF89a', 'GifFormatError', 'GifBlock', 'Extensio...
 
 FILE
-    gif/gif.py
+    c:\users\alec\desktop\gif\gif.py
+
+

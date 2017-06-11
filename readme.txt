@@ -452,6 +452,6 @@ DATA
     __all__ = ['GIF87a', 'GIF89a', 'GifFormatError', 'GifBlock', 'Extensio...
 
 FILE
-    c:\users\alec\desktop\gif\gif.py
+    gif\gif.py
 
 

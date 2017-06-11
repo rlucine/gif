@@ -1,0 +1,7 @@
+# Python files
+*.py text
+*.pyw text
+
+# Python binaries
+*.pyo binary
+*.pyc binary

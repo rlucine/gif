@@ -3,6 +3,13 @@
     therefore each class has generally public attributes and is intended to be
     used as a struct. However, some quick functions are included due to the
     relative efficiency.
+	
+	Two command-line invocations are provided:
+	* gif.py test <file.gif>
+	This decompresses and recompresses the image to test the module.
+	
+	* gif.py optimize <input.gif> <output.gif>
+	This compresses the image by removing extra colors and blocks.
 '''
 
 ## Sources cited:
@@ -1306,10 +1313,11 @@ class Gif(object):
 #================================================================
 if __name__ == "__main__":
     from time import time
+    from sys import argv
 
     def test(path):
         '''Unit test on one gif image'''
-        print("Testing %s" % path)
+        print("Testing \"%s\"" % path)
         #Time the opening of the GIF image
         ti = time()
         g = Gif(path)
@@ -1338,16 +1346,28 @@ if __name__ == "__main__":
         tf = time()
         print("Encoded in %f seconds!" % (tf - ti))
         #Done!
-        print("Passed test!\n")
-
-    # Encode / decode test
-    test("test/audrey.gif")
-	
-    # Copying test
-    g = Gif("test/audrey.gif")
-    gfx, image = g.blocks
-    print(g.optimize())
-    g.convert_gif87a()
-    with open("test/copy.gif", "wb") as file:
-        file.write(g.encode())
+        print("Passed test!")
     
+    def optimize(path, output):
+        '''Optimize the gif at the file'''
+        print("Optimizing \"%s\"" % path)
+        g = Gif(path)
+        gfx, image = g.blocks
+        initial = len(g.encode())
+        delta = g.optimize()
+        print("Decreased size by %d bytes (%d%%)!" % (delta, delta/initial*100))
+        g.convert_gif87a()
+        print("Saving to \"%s\"" % output)
+        with open(output, "wb") as file:
+            file.write(g.encode())
+        print("Done!")
+    
+    mode = argv[1] if len(argv) > 1 else "test"
+    test_file = argv[2] if len(argv) > 2 else "test/audrey.gif"
+    output = argv[3] if len(argv) > 3 else "temp.gif"
+        
+    # Command-line usage
+    if mode == "test":
+        test(test_file)
+    elif mode == "optimize":
+        optimize(test_file, output)
